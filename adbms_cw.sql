@@ -321,3 +321,167 @@ END;
 EXECUTE insertFine('STD-0001', 50.00, TO_DATE('2024-10-31', 'YYYY-MM-DD'), 'Late return', 'Unpaid');
 EXECUTE insertFine('STD-0003', 50.00, TO_DATE('2024-11-15', 'YYYY-MM-DD'), 'Late return', 'Paid');
 EXECUTE insertFine('STD-0004', 50.00, TO_DATE('2024-12-31', 'YYYY-MM-DD'), 'Late return', 'Unpaid');
+
+
+
+
+
+-- PL / SQL block to update the return date of the books borrowed.
+SET SERVEROUTPUT ON;
+ACCEPT studentId CHAR PROMPT 'Enter Student ID: ';
+ACCEPT bookId CHAR PROMPT 'Enter Book ID: ';
+ACCEPT returnDate CHAR PROMPT 'Enter Return Date (YYYY-MM-DD): ';
+
+DECLARE
+    v_student_id VARCHAR2(12) := '&studentId';
+    v_book_id VARCHAR2(12) := '&bookId';
+    v_return_date DATE;
+BEGIN
+    -- Convert the input string to a DATE type
+    v_return_date := TO_DATE('&returnDate', 'YYYY-MM-DD');
+
+    UPDATE Student_Book
+    SET return_date = v_return_date
+    WHERE student_id = v_student_id AND book_id = v_book_id;
+
+    IF SQL%ROWCOUNT > 0 THEN
+        dbms_output.put_line('Return date updated successfully for Student ID: ' || v_student_id || ' and Book ID: ' || v_book_id);
+    ELSE
+        dbms_output.put_line('No records found for Student ID: ' || v_student_id || ' and Book ID: ' || v_book_id);
+    END IF;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        dbms_output.put_line('An error occurred: ' || SQLERRM);
+END;
+
+
+
+
+
+
+-- Procedure to display unique books that are issued to Students
+CREATE OR REPLACE PROCEDURE list_unique_issued_books
+IS
+BEGIN
+    FOR record IN (
+        SELECT sb.book_id, b.title AS book_title, sb.student_id, sb.issue_date
+        FROM Student_Book sb
+        INNER JOIN Books b ON sb.book_id = b.book_id
+        GROUP BY sb.book_id, b.title, sb.student_id, sb.issue_date
+        ORDER BY sb.issue_date
+    )
+    LOOP
+        dbms_output.put_line('Book ID: ' || record.book_id || 
+                             ', Title: ' || record.book_title || 
+                             ', Student ID: ' || record.student_id || 
+                             ', Issue Date: ' || TO_CHAR(record.issue_date, 'YYYY-MM-DD'));
+    END LOOP;
+END;
+
+-- Execute the procedure "list_unique_issued_books"
+BEGIN
+    list_unique_issued_books;
+END;
+
+
+
+
+
+-- Procedure to display the students have overdue books
+CREATE OR REPLACE PROCEDURE display_overdue_students
+IS
+    CURSOR overdue_books_cursor IS
+        SELECT s.student_id, s.first_name, s.last_name, sb.book_id, b.title AS book_title, sb.issue_date, sb.due_date
+        FROM Student s
+        JOIN Student_Book sb ON s.student_id = sb.student_id
+        JOIN Books b ON sb.book_id = b.book_id
+        WHERE sb.due_date < SYSDATE AND (sb.return_date IS NULL OR sb.return_date > sb.due_date)
+        ORDER BY s.student_id;
+
+    -- Variables to hold individual column values from the cursor
+    v_student_id Student.student_id%TYPE;
+    v_first_name Student.first_name%TYPE;
+    v_last_name Student.last_name%TYPE;
+    v_book_id Student_Book.book_id%TYPE;
+    v_book_title Books.title%TYPE;
+    v_issue_date Student_Book.issue_date%TYPE;
+    v_due_date Student_Book.due_date%TYPE;
+    
+BEGIN
+    OPEN overdue_books_cursor;
+    LOOP
+        FETCH overdue_books_cursor INTO v_student_id, v_first_name, v_last_name, v_book_id, v_book_title, v_issue_date, v_due_date;
+        EXIT WHEN overdue_books_cursor%NOTFOUND;
+        
+        dbms_output.put_line('Student ID: ' || v_student_id || 
+                             ', Name: ' || v_first_name || ' ' || v_last_name || 
+                             ', Book ID: ' || v_book_id || 
+                             ', Book Title: ' || v_book_title || 
+                             ', Issue Date: ' || TO_CHAR(v_issue_date, 'YYYY-MM-DD') || 
+                             ', Due Date: ' || TO_CHAR(v_due_date, 'YYYY-MM-DD'));
+    END LOOP;
+    CLOSE overdue_books_cursor;
+END;
+
+
+-- Execute the procedure "display_overdue_students;"
+BEGIN
+    display_overdue_students;
+END;
+
+
+
+
+
+-- Cursor to retrieve authors and their published books in the last 10 years
+CREATE OR REPLACE PROCEDURE author_publications
+IS
+    CURSOR author_books_cursor IS
+        SELECT a.first_name, a.last_name, COUNT(b.book_id) AS total_books,LISTAGG(b.title, ', ') 
+        WITHIN GROUP (ORDER BY b.title) AS book_titles
+        FROM author a
+        JOIN Books b ON a.author_id = b.author_id
+        WHERE b.publication_year >= ADD_MONTHS(SYSDATE, -120) -- Last 10 years
+        GROUP BY a.author_id, a.first_name, a.last_name
+        HAVING COUNT(b.book_id) > 0; 
+
+    v_first_name author.first_name%TYPE;
+    v_last_name author.last_name%TYPE;
+    v_total_books NUMBER;
+    v_book_titles VARCHAR2(100);
+
+BEGIN
+    OPEN author_books_cursor;
+    LOOP
+        FETCH author_books_cursor INTO 
+            v_first_name, v_last_name, v_total_books, v_book_titles;
+        
+        EXIT WHEN author_books_cursor%NOTFOUND;
+
+        dbms_output.put_line('Author: ' || v_first_name || ' ' || v_last_name || 
+                             ', Total Books Published: ' || v_total_books || 
+                             ', Titles: ' || v_book_titles);
+    END LOOP;
+
+    CLOSE author_books_cursor;
+END;
+
+-- Executing the procedure "analyze_author_publications"
+BEGIN
+    author_publications;
+END;
+
+
+
+
+
+-- Getting the details of the students who borrow books and the librarian who issued books.
+SELECT s.student_id, s.first_name AS student_name, l.lib_id, l.first_name AS librarian_name, sb.issue_date, sb.return_date
+FROM Student s
+JOIN transaction t 
+ON s.student_id = t.student_id
+JOIN Librarian l 
+ON t.lib_id = l.lib_id
+JOIN Student_Book sb 
+ON s.student_id = sb.student_id AND t.book_id = sb.book_id;
